@@ -16,9 +16,6 @@ void kernelvec();
 
 extern int devintr();
 
-static const char *
-scause_desc(uint64 stval);
-
 void
 trapinit(void)
 {
@@ -31,6 +28,12 @@ trapinithart(void)
 {
   w_stvec((uint64)kernelvec);
 }
+
+/** 
+ * When a page-fault occurs on a COW page, 
+ * allocate a new page with kalloc(), 
+ * copy the old page to the new page, 
+ * and install the new page in the PTE with PTE_W set  */
 
 //
 // handle an interrupt, exception, or system call from user space.
@@ -70,12 +73,84 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
-    printf("usertrap(): unexpected scause %p (%s) pid=%d\n", r_scause(), scause_desc(r_scause()), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    p->killed = 1;
-  }
+  } else if (r_scause() == 15) {
+    pte_t* pte; 
+    uint64 va = PGROUNDDOWN(r_stval());
+    
+    if (va >= MAXVA){
+      printf("va is larger than MAXVA!\n");
+      p->killed = 1;
+      goto end;
+    }
+    
+    if (va > p->sz){
+      printf("va is larger than sz!\n");
+      p->killed = 1;
+      goto end;
+    }
+    
+    pte = walk(p->pagetable, va, 0);
+    
+    if(pte == 0 || ((*pte) & PTE_COW) == 0 || ((*pte) & PTE_V) == 0 || ((*pte) & PTE_U)==0){
+      printf("usertrap: pte not exist or it's not cow page\n");
+      p->killed=1;
+      goto end;
+    }
 
+    //printf("------------------------------\n");
+    //printf("pte addr: %p, pte perm: %x\n",pte, PTE_FLAGS(*pte));
+    if(*pte & PTE_COW){
+      //printf("usertrap():got page COW faults at %p\n", va);
+      char *mem;
+      // printf("------------------------------\n");
+      if((mem = kalloc()) == 0)
+      {
+        printf("usertrap(): memery alloc fault\n");
+        p->killed = 1;
+        goto end;
+      }
+      memset(mem, 0, PGSIZE);
+      uint64 pa = walkaddr(p->pagetable, va);
+      if(pa){
+        memmove(mem, (char*)pa, PGSIZE);
+        int perm = PTE_FLAGS(*pte);
+        perm |= PTE_W;
+        perm &= ~PTE_COW;
+        if(mappages(p->pagetable, va, PGSIZE, (uint64)mem, perm) != 0){
+          printf("usertrap(): can not map page\n");
+          kfree(mem); 
+          p->killed = 1;
+          goto end;
+        }
+        //*pte |= PTE_V;
+        /** mem处是新的页，添加一处引用，原来的物理地址减少一处引用  */
+        // addref("usertrap():",(void *)mem);
+        // subref("usertrap():", (void *)pa);
+        kfree((void*) pa);
+        /* int ref = getref((void*)mem);
+        printf("ref or mem:%d\n",ref); */
+      }
+      else
+      {
+        printf("usertrap(): can not map va: %p \n", va);
+        p->killed = 1;
+        goto end;
+      }
+    }
+    else
+    {
+      printf("usertrap(): not caused by cow \n");
+      p->killed = 1;
+      goto end;
+    }
+    
+  } else {
+    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval()); 
+    p->killed = 1;
+    goto end;
+  }
+end:
   if(p->killed)
     exit(-1);
 
@@ -132,6 +207,7 @@ usertrapret(void)
 
 // interrupts and exceptions from kernel code go here via kernelvec,
 // on whatever the current kernel stack is.
+// must be 4-byte aligned to fit in stvec.
 void 
 kerneltrap()
 {
@@ -146,7 +222,7 @@ kerneltrap()
     panic("kerneltrap: interrupts enabled");
 
   if((which_dev = devintr()) == 0){
-    printf("scause %p (%s)\n", scause, scause_desc(scause));
+    printf("scause %p\n", scause);
     printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
     panic("kerneltrap");
   }
@@ -191,14 +267,9 @@ devintr()
       uartintr();
     } else if(irq == VIRTIO0_IRQ || irq == VIRTIO1_IRQ ){
       virtio_disk_intr(irq - VIRTIO0_IRQ);
-    } else {
-      // the PLIC sends each device interrupt to every core,
-      // which generates a lot of interrupts with irq==0.
     }
 
-    if(irq)
-      plic_complete(irq);
-
+    plic_complete(irq);
     return 1;
   } else if(scause == 0x8000000000000001L){
     // software interrupt from a machine-mode timer interrupt,
@@ -215,69 +286,5 @@ devintr()
     return 2;
   } else {
     return 0;
-  }
-}
-
-static const char *
-scause_desc(uint64 stval)
-{
-  static const char *intr_desc[16] = {
-    [0] "user software interrupt",
-    [1] "supervisor software interrupt",
-    [2] "<reserved for future standard use>",
-    [3] "<reserved for future standard use>",
-    [4] "user timer interrupt",
-    [5] "supervisor timer interrupt",
-    [6] "<reserved for future standard use>",
-    [7] "<reserved for future standard use>",
-    [8] "user external interrupt",
-    [9] "supervisor external interrupt",
-    [10] "<reserved for future standard use>",
-    [11] "<reserved for future standard use>",
-    [12] "<reserved for future standard use>",
-    [13] "<reserved for future standard use>",
-    [14] "<reserved for future standard use>",
-    [15] "<reserved for future standard use>",
-  };
-  static const char *nointr_desc[16] = {
-    [0] "instruction address misaligned",
-    [1] "instruction access fault",
-    [2] "illegal instruction",
-    [3] "breakpoint",
-    [4] "load address misaligned",
-    [5] "load access fault",
-    [6] "store/AMO address misaligned",
-    [7] "store/AMO access fault",
-    [8] "environment call from U-mode",
-    [9] "environment call from S-mode",
-    [10] "<reserved for future standard use>",
-    [11] "<reserved for future standard use>",
-    [12] "instruction page fault",
-    [13] "load page fault",
-    [14] "<reserved for future standard use>",
-    [15] "store/AMO page fault",
-  };
-  uint64 interrupt = stval & 0x8000000000000000L;
-  uint64 code = stval & ~0x8000000000000000L;
-  if (interrupt) {
-    if (code < NELEM(intr_desc)) {
-      return intr_desc[code];
-    } else {
-      return "<reserved for platform use>";
-    }
-  } else {
-    if (code < NELEM(nointr_desc)) {
-      return nointr_desc[code];
-    } else if (code <= 23) {
-      return "<reserved for future standard use>";
-    } else if (code <= 31) {
-      return "<reserved for custom use>";
-    } else if (code <= 47) {
-      return "<reserved for future standard use>";
-    } else if (code <= 63) {
-      return "<reserved for custom use>";
-    } else {
-      return "<reserved for future standard use>";
-    }
   }
 }
