@@ -16,7 +16,7 @@
 struct devsw devsw[NDEV];
 struct {
   struct spinlock lock;
-  struct file file[NFILE];
+  //struct file file[NFILE];
 } ftable;
 
 void
@@ -32,13 +32,12 @@ filealloc(void)
   struct file *f;
 
   acquire(&ftable.lock);
-  for(f = ftable.file; f < ftable.file + NFILE; f++){
-    if(f->ref == 0){
-      f->ref = 1;
-      release(&ftable.lock);
-      return f;
-    }
-  }
+  f = bd_malloc(sizeof(*f));
+  if(f->ref == 0){
+    f->ref = 1;
+    release(&ftable.lock);
+    return f;
+  } 
   release(&ftable.lock);
   return 0;
 }
@@ -59,7 +58,7 @@ filedup(struct file *f)
 void
 fileclose(struct file *f)
 {
-  struct file ff;
+  struct file ff; 
 
   acquire(&ftable.lock);
   if(f->ref < 1)
@@ -68,11 +67,12 @@ fileclose(struct file *f)
     release(&ftable.lock);
     return;
   }
-  ff = *f;
+  ff = *f; 
   f->ref = 0;
   f->type = FD_NONE;
+  bd_free(f);
   release(&ftable.lock);
-
+  
   if(ff.type == FD_PIPE){
     pipeclose(ff.pipe, ff.writable);
   } else if(ff.type == FD_INODE || ff.type == FD_DEVICE){
@@ -114,9 +114,7 @@ fileread(struct file *f, uint64 addr, int n)
   if(f->type == FD_PIPE){
     r = piperead(f->pipe, addr, n);
   } else if(f->type == FD_DEVICE){
-    if(f->major < 0 || f->major >= NDEV || !devsw[f->major].read)
-      return -1;
-    r = devsw[f->major].read(f, 1, addr, n);
+    r = devsw[f->major].read(1, addr, n);
   } else if(f->type == FD_INODE){
     ilock(f->ip);
     if((r = readi(f->ip, 1, addr, f->off, n)) > 0)
@@ -142,9 +140,7 @@ filewrite(struct file *f, uint64 addr, int n)
   if(f->type == FD_PIPE){
     ret = pipewrite(f->pipe, addr, n);
   } else if(f->type == FD_DEVICE){
-    if(f->major < 0 || f->major >= NDEV || !devsw[f->major].write)
-      return -1;
-    ret = devsw[f->major].write(f, 1, addr, n);
+    ret = devsw[f->major].write(1, addr, n);
   } else if(f->type == FD_INODE){
     // write a few blocks at a time to avoid exceeding
     // the maximum log transaction size, including

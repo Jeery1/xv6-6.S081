@@ -1,11 +1,6 @@
 struct stat;
 struct rtcdate;
 
-// 添加在文件最开头
-typedef unsigned int uint;
-typedef unsigned short ushort;
-typedef unsigned char uchar;
-
 // system calls
 int fork(void);
 int exit(int) __attribute__((noreturn));
@@ -47,5 +42,3 @@ void* memset(void*, int, uint);
 void* malloc(uint);
 void free(void*);
 int atoi(const char*);
-int memcmp(const void *, const void *, uint);
-void *memcpy(void *, const void *, uint);
