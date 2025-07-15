@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -188,10 +190,12 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 size, int do_free)
   last = PGROUNDDOWN(va + size - 1);
   for(;;){
     if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
+      //panic("uvmunmap: walk");
+      goto next;
     if((*pte & PTE_V) == 0){
-      printf("va=%p pte=%p\n", a, *pte);
-      panic("uvmunmap: not mapped");
+      //printf("va=%p pte=%p\n", a, *pte);
+      //panic("uvmunmap: not mapped");
+      goto next;
     }
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
@@ -200,6 +204,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 size, int do_free)
       kfree((void*)pa);
     }
     *pte = 0;
+  next:
     if(a == last)
       break;
     a += PGSIZE;
@@ -326,9 +331,11 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
-      panic("uvmcopy: pte should exist");
+      //panic("uvmcopy: pte should exist");
+      continue;
     if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+      //panic("uvmcopy: page not present");
+      continue;
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
@@ -365,17 +372,38 @@ uvmclear(pagetable_t pagetable, uint64 va)
 int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
+   //copyout(pagetable, sp, (char *)ustack, (argc+1)*sizeof(uint64)
   uint64 n, va0, pa0;
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
     pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
+    if(pa0 == 0){
+      /**
+       * 为va0分配一页
+       */
+      //printf("*copyout*\n");
+      if(lazyalloc(pagetable, va0)){
+        //printf("copyout 1\n");
+        pa0 = walkaddr(pagetable, va0);
+      }
+      else
+      {
+        //printf("copyout 2\n");
+        return -1;
+      }
+    }
+    if(pa0 == 0){
       return -1;
-    n = PGSIZE - (dstva - va0);
+    }
+    /**
+     * 这样就是在计算offset了
+     */
+    uint64 offset = (dstva - va0);
+    n = PGSIZE - offset;
     if(n > len)
       n = len;
-    memmove((void *)(pa0 + (dstva - va0)), src, n);
+    memmove((void *)(pa0 + offset), src, n);
 
     len -= n;
     src += n;
@@ -390,13 +418,36 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
+   /**
+   * 系统调用时，os将用户态转化为内核态
+   * 
+   */
   uint64 n, va0, pa0;
 
   while(len > 0){
     va0 = PGROUNDDOWN(srcva);
     pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
+    
+    if(pa0 == 0){
+      /**
+       * 为va0分配一页
+       */
+      //printf("copyin\n");
+      if(lazyalloc(pagetable, va0)){
+        pa0 = walkaddr(pagetable, va0);
+      }
+      else
+      {
+        return -1;
+      }
+    }
+    /**
+     * 分配了还是出错 
+     * */
+    if(pa0 == 0){
       return -1;
+    }
+      //return -1;
     n = PGSIZE - (srcva - va0);
     if(n > len)
       n = len;
@@ -450,4 +501,76 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+int layer = 1;
+
+void
+vmprint(pagetable_t pagetable, int isinit){
+  if(isinit){
+    printf("page table %p\n", pagetable);
+    isinit = 0;
+  }
+  // there are 2^9 = 512 PTEs in a page table.
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    /* 如果该PTE是有效映射 */
+    if(pte & PTE_V){
+      /* 打印PTE信息 */
+      for (int i = 0; i < layer; i++)
+      {
+        /* if(i == layer - 1)
+          printf("..");
+        else
+          printf(".. "); */
+        printf(" ..");
+      }
+      printf("%d: pte %p pa %p\n",i, pte, PTE2PA(pte));
+      /* 这个PTE有孩子 */
+      if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+        // this PTE points to a lower-level page table.
+        uint64 child = PTE2PA(pte);
+        layer++;
+        vmprint((pagetable_t)child, 0);
+        layer--;
+      } 
+    }
+  } 
+}
+
+int
+lazyalloc(pagetable_t pagetable, uint64 va){ 
+  if(va >= myproc()->sz){
+    printf("lazyalloc: va is bigger than proc sz\n");
+    return -1;
+  }
+
+  if(va < myproc()->ustack_top){
+    printf("lazyalloc: va is enter guard page!\n");
+    return -1;
+  }
+  
+  if(walkaddr(pagetable, va) != 0)
+    return 0;
+  
+  char *mem;
+  mem = kalloc();
+  va = PGROUNDDOWN(va);
+  if(mem != 0){
+    memset(mem, 0, PGSIZE);
+    if(mappages(pagetable, va, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
+      printf("There is no page mapped");
+      kfree(mem);
+      uvmdealloc(pagetable, va, myproc()->sz);
+      return -1;
+    }
+  }
+  else{
+    /**
+     * Handle the kalloc is invalid
+     */
+    printf("Mem is not enough \n");
+    return -1;
+  }
+  return 1;
 }

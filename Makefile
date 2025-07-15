@@ -120,6 +120,7 @@ mkfs/mkfs: mkfs/mkfs.c $K/fs.h
 .PRECIOUS: %.o
 
 UPROGS=\
+	$U/_lazytests\
 	$U/_cat\
 	$U/_echo\
 	$U/_forktest\
@@ -141,15 +142,9 @@ UPROGS=\
 	$U/_testsh\
 	$U/_kalloctest\
 	$U/_bcachetest\
+	$U/_mounttest\
+	$U/_crashtest\
 	$U/_alloctest\
-	$U/_bigfile\
-	$U/_sleep\
-	$U/_pingpong\
-	$U/_primes\
-	$U/_find\
-	$U/_teststat\
-	$U/_xargs\
-	$U/_nsh\
 
 fs.img: mkfs/mkfs README user/xargstest.sh $(UPROGS)
 	mkfs/mkfs fs.img README user/xargstest.sh $(UPROGS)
@@ -171,11 +166,11 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
 	then echo "-gdb tcp::$(GDBPORT)"; \
 	else echo "-s -p $(GDBPORT)"; fi)
 ifndef CPUS
-CPUS := 1
+CPUS := 3
 endif
 
-QEMUEXTRA = 
-QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
+QEMUEXTRA = -drive file=fs1.img,if=none,format=raw,id=x1 -device virtio-blk-device,drive=x1,bus=virtio-mmio-bus.1
+QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 3G -smp $(CPUS) -nographic
 QEMUOPTS += -drive file=fs.img,if=none,format=raw,id=x0 -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 
 qemu: $K/kernel fs.img

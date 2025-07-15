@@ -98,7 +98,7 @@ exec(char *path, char **argv)
   // argc is returned via the system call return
   // value, which goes in a0.
   p->tf->a1 = sp;
-
+  p->ustack_top = stackbase + PGSIZE;
   // Save program name for debugging.
   for(last=s=path; *s; s++)
     if(*s == '/')
@@ -112,6 +112,10 @@ exec(char *path, char **argv)
   p->tf->epc = elf.entry;  // initial program counter = main
   p->tf->sp = sp; // initial stack pointer
   proc_freepagetable(oldpagetable, oldsz);
+
+  if(p->pid == 1){
+    vmprint(p->pagetable,1); // print the page table for the init process
+  }
 
   return argc; // this ends up in a0, the first argument to main(argc, argv)
 
