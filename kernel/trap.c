@@ -29,12 +29,6 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
-/** 
- * When a page-fault occurs on a COW page, 
- * allocate a new page with kalloc(), 
- * copy the old page to the new page, 
- * and install the new page in the PTE with PTE_W set  */
-
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -55,17 +49,16 @@ usertrap(void)
   
   // save user program counter.
   p->tf->epc = r_sepc();
-  
+
   if(r_scause() == 8){
     // system call
-
+    /* printf("SysyCall\n"); */
     if(p->killed)
       exit(-1);
 
     // sepc points to the ecall instruction,
     // but we want to return to the next instruction.
     p->tf->epc += 4;
-
     // an interrupt will change sstatus &c registers,
     // so don't enable until done with those registers.
     intr_on();
@@ -73,90 +66,29 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else if (r_scause() == 15) {
-    pte_t* pte; 
-    uint64 va = PGROUNDDOWN(r_stval());
-    
-    if (va >= MAXVA){
-      printf("va is larger than MAXVA!\n");
-      p->killed = 1;
-      goto end;
-    }
-    
-    if (va > p->sz){
-      printf("va is larger than sz!\n");
-      p->killed = 1;
-      goto end;
-    }
-    
-    pte = walk(p->pagetable, va, 0);
-    
-    if(pte == 0 || ((*pte) & PTE_COW) == 0 || ((*pte) & PTE_V) == 0 || ((*pte) & PTE_U)==0){
-      printf("usertrap: pte not exist or it's not cow page\n");
-      p->killed=1;
-      goto end;
-    }
-
-    //printf("------------------------------\n");
-    //printf("pte addr: %p, pte perm: %x\n",pte, PTE_FLAGS(*pte));
-    if(*pte & PTE_COW){
-      //printf("usertrap():got page COW faults at %p\n", va);
-      char *mem;
-      // printf("------------------------------\n");
-      if((mem = kalloc()) == 0)
-      {
-        printf("usertrap(): memery alloc fault\n");
-        p->killed = 1;
-        goto end;
-      }
-      memset(mem, 0, PGSIZE);
-      uint64 pa = walkaddr(p->pagetable, va);
-      if(pa){
-        memmove(mem, (char*)pa, PGSIZE);
-        int perm = PTE_FLAGS(*pte);
-        perm |= PTE_W;
-        perm &= ~PTE_COW;
-        if(mappages(p->pagetable, va, PGSIZE, (uint64)mem, perm) != 0){
-          printf("usertrap(): can not map page\n");
-          kfree(mem); 
-          p->killed = 1;
-          goto end;
-        }
-        //*pte |= PTE_V;
-        /** mem处是新的页，添加一处引用，原来的物理地址减少一处引用  */
-        // addref("usertrap():",(void *)mem);
-        // subref("usertrap():", (void *)pa);
-        kfree((void*) pa);
-        /* int ref = getref((void*)mem);
-        printf("ref or mem:%d\n",ref); */
-      }
-      else
-      {
-        printf("usertrap(): can not map va: %p \n", va);
-        p->killed = 1;
-        goto end;
-      }
-    }
-    else
-    {
-      printf("usertrap(): not caused by cow \n");
-      p->killed = 1;
-      goto end;
-    }
-    
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval()); 
+    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
-    goto end;
   }
-end:
+
   if(p->killed)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2){
+    // printf("got tick intr\n");
+    // printf("num:%d\n",p->tf->a7);
+    p->tickpassed++;
+    if(p->ticks != 0){
+      if(p->tickpassed == p->ticks){
+        memmove(&p->savedtf, p->tf, sizeof(struct trapframe));
+        p->tf->epc = (uint64)p->handler;
+      }
+    }
     yield();
+  }
+    
 
   usertrapret();
 }
@@ -205,6 +137,9 @@ usertrapret(void)
   ((void (*)(uint64,uint64))fn)(TRAPFRAME, satp);
 }
 
+/**
+ * 由KernelVec.s 48行跳转
+ */
 // interrupts and exceptions from kernel code go here via kernelvec,
 // on whatever the current kernel stack is.
 // must be 4-byte aligned to fit in stvec.
@@ -220,13 +155,19 @@ kerneltrap()
     panic("kerneltrap: not from supervisor mode");
   if(intr_get() != 0)
     panic("kerneltrap: interrupts enabled");
-
+  /**
+   * It calls devintr (kernel/-
+   * trap.c:177) to check for and handle the former. 
+   * If the trap isn’t a device interrupt, it is an exception,
+   * and that is always a fatal error if it occurs in the kernel.
+   */
   if((which_dev = devintr()) == 0){
     printf("scause %p\n", scause);
     printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
     panic("kerneltrap");
   }
 
+  /** kerneltrap calls yield to give other threads a chance to run. */
   // give up the CPU if this is a timer interrupt.
   if(which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING)
     yield();
@@ -235,6 +176,8 @@ kerneltrap()
   // so restore trap registers for use by kernelvec.S's sepc instruction.
   w_sepc(sepc);
   w_sstatus(sstatus);
+
+  /** 返回kernelvec.S 48行  */
 }
 
 void
