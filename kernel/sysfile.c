@@ -53,6 +53,31 @@ fdalloc(struct file *f)
 }
 
 uint64
+sys_connect(void)
+{
+  struct file *f;
+  int fd;
+  uint32 raddr;
+  uint32 rport;
+  uint32 lport;
+
+  if (argint(0, (int*)&raddr) < 0 ||
+      argint(1, (int*)&lport) < 0 ||
+      argint(2, (int*)&rport) < 0) {
+    return -1;
+  }
+
+  if(sockalloc(&f, raddr, lport, rport) < 0)
+    return -1;
+  if((fd=fdalloc(f)) < 0){
+    fileclose(f);
+    return -1;
+  }
+
+  return fd;
+}
+
+uint64
 sys_dup(void)
 {
   struct file *f;
@@ -482,123 +507,4 @@ sys_pipe(void)
   }
   return 0;
 }
-
-
-uint64
-sys_mmap(void){
-  uint64 addr;
-  int length;
-  int prot;
-  int flags;
-  int fd;
-  struct file* f;
-  int offset;
-  
-  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0 || 
-     argint(2, &prot) < 0 || argint(3, &flags) < 0 || 
-     argfd(4, &fd, &f) < 0 || argint(5, &offset) < 0){
-    return -1;
-  }
-
-  if(!f->writable && (prot & PROT_WRITE) && (flags & MAP_SHARED)){
-    return -1;
-  }
-  struct proc* p;
-  p = myproc();
-  
-  struct VMA* vma = 0;
-  /** 从上往下找到第一个可用的vma  */
-  for (int i = NVMA - 1; i >= 0; i--)
-  {
-    if(p->vmas[i].vm_valid){
-      vma = &p->vmas[i];
-      /** 置当前的imaxvma为i  */
-      p->current_imaxvma = i;
-      break;
-    }
-  }
-  if(vma){
-    printf("sys_mmap(): %p, length: %d\n",p->current_maxva, length);
-    uint64 vm_end = PGROUNDDOWN(p->current_maxva);
-    uint64 vm_start = PGROUNDDOWN(p->current_maxva - length);
-    printf("vm_start(): %p, vm_end: %p\n",vm_start, vm_end);
-    vma->vm_valid = 0;
-    vma->vm_fd = fd;
-    vma->vm_file = f;
-    vma->vm_flags = flags;
-    vma->vm_prot = prot;
-    vma->vm_end = vm_end;
-    vma->vm_start = vm_start;
-    vma->vm_file->ref++;
-    p->current_maxva = vm_start;
-  }
-  else
-  {
-    return -1;
-  }  
-  return vma->vm_start;
-}
-
-/**
- * int munmap(void *addr, size_t length);
- * 
- * 
- * An munmap call might cover only a portion of an mmap-ed region, but you can assume that 
- * it will either unmap at the start, 
- * or at the end, or the whole region (but not punch a hole in the middle of a region).
- */
-uint64
-sys_munmap(void){
-  uint64 addr;
-  int length;
-  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0){
-    return -1;
-  }
-  printf("### sys_munmap: \n");
-  printf("addr: %p, length:%d, current:%p\n", addr, length, myproc()->current_maxva);
-  struct proc* p = myproc();
-  for (int i = NVMA - 1; i >= 0; i--)
-  {
-    if(p->vmas[i].vm_start <= addr && addr <= p->vmas[i].vm_end){
-      struct VMA* vma = &p->vmas[i];
-      /** 首先要判断  */
-      if(walkaddr(p->pagetable, vma->vm_start)){
-        if(vma->vm_flags == MAP_SHARED){
-          printf("sys_munmap(): write back \n");
-          /** 回写文件  */
-          filewrite(vma->vm_file, vma->vm_start, length);
-        }
-        uvmunmap(p->pagetable, vma->vm_start, length ,1);
-      }
-
-      vma->vm_start += length;
-      printf("vma_start: %p, vma_end: %p\n", vma->vm_start, vma->vm_end);
-      if(vma->vm_start == vma->vm_end){
-        vma->vm_file->ref--;
-        /** 置该块可用  */
-        vma->vm_valid = 1;
-      }
-
-      /** Shrink  */
-      int j;
-      /** 紧缩 p->current_maxva */
-      for (j = p->current_imaxvma; j < NVMA; j++)
-      {
-        if(!p->vmas[j].vm_valid){
-          p->current_maxva = p->vmas[j].vm_start;
-          p->current_imaxvma = j;
-          break;
-        }
-      }
-      if(j == NVMA){
-        p->current_maxva = VMASTART;
-      }
-      return 0;
-    }
-  }
-  
-  printf("################ arrive at munmap!\n");
-  return -1;
-}
-
 

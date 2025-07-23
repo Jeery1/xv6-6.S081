@@ -82,25 +82,6 @@ struct trapframe {
 
 enum procstate { UNUSED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
-
-
-struct VMA
-{
-  /** 说明VMA是否可用，1为可用，0为已被占用  */
-  int vm_valid;   
-  uint64 vm_start; 
-  uint64 vm_end; 
-  /** Flags  */
-  int vm_flags;
-  /** 页面权限，可写？可读？  */
-  int vm_prot; 
-  /** 指向某个文件  */
-  struct file* vm_file;
-  /** 文件描述符  */
-  int vm_fd;
-};
-
-
 // Per-process state
 struct proc {
   struct spinlock lock;
@@ -122,12 +103,4 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
-
-  /** Implementation of MMAP  */
-  /** VMA管理数组  */
-  struct VMA vmas[NVMA];
-  /** 当前可用的最大的虚拟地址  从上往下*/
-  uint64 current_maxva;
-  /** 当前可用的最大虚拟地址对应在vmas中的VMA序号，方便对current_maxva进行内存紧缩 */
-  int current_imaxvma;
 };

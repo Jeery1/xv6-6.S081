@@ -79,6 +79,8 @@ fileclose(struct file *f)
     begin_op(ff.ip->dev);
     iput(ff.ip);
     end_op(ff.ip->dev);
+  } else if(ff.type == FD_SOCK){  // 新增套接字关闭处理
+    sockclose(ff.sock);
   }
 }
 
@@ -122,6 +124,8 @@ fileread(struct file *f, uint64 addr, int n)
     if((r = readi(f->ip, 1, addr, f->off, n)) > 0)
       f->off += r;
     iunlock(f->ip);
+  } else if(f->type == FD_SOCK){  // 新增套接字读取处理
+    r = sockread(f->sock, addr, n);
   } else {
     panic("fileread");
   }
@@ -146,12 +150,6 @@ filewrite(struct file *f, uint64 addr, int n)
       return -1;
     ret = devsw[f->major].write(f, 1, addr, n);
   } else if(f->type == FD_INODE){
-    // write a few blocks at a time to avoid exceeding
-    // the maximum log transaction size, including
-    // i-node, indirect block, allocation blocks,
-    // and 2 blocks of slop for non-aligned writes.
-    // this really belongs lower down, since writei()
-    // might be writing a device like the console.
     int max = ((MAXOPBLOCKS-1-1-2) / 2) * BSIZE;
     int i = 0;
     while(i < n){
@@ -173,6 +171,8 @@ filewrite(struct file *f, uint64 addr, int n)
       i += r;
     }
     ret = (i == n ? n : -1);
+  } else if(f->type == FD_SOCK){  // 新增套接字写入处理
+    ret = sockwrite(f->sock, addr, n);
   } else {
     panic("filewrite");
   }

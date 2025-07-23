@@ -37,6 +37,12 @@ kvminit()
   // virtio mmio disk interface 1
   kvmmap(VIRTION(1), VIRTION(1), PGSIZE, PTE_R | PTE_W);
 
+  // PCI-E ECAM (configuration space), for pci.c
+  kvmmap(0x30000000L, 0x30000000L, 0x10000000, PTE_R | PTE_W);
+
+  // pci.c maps the e1000's registers here.
+  kvmmap(0x40000000L, 0x40000000L, 0x20000, PTE_R | PTE_W);
+
   // CLINT
   kvmmap(CLINT, CLINT, 0x10000, PTE_R | PTE_W);
 
@@ -163,9 +169,8 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   for(;;){
     if((pte = walk(pagetable, a, 1)) == 0)
       return -1;
-    if(*pte & PTE_V){
+    if(*pte & PTE_V)
       panic("remap");
-    }
     *pte = PA2PTE(pa) | perm | PTE_V;
     if(a == last)
       break;

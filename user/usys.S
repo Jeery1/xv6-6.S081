@@ -105,18 +105,13 @@ uptime:
  li a7, SYS_uptime
  ecall
  ret
+.global connect
+connect:
+ li a7, SYS_connect
+ ecall
+ ret
 .global ntas
 ntas:
  li a7, SYS_ntas
- ecall
- ret
-.global mmap
-mmap:
- li a7, SYS_mmap
- ecall
- ret
-.global munmap
-munmap:
- li a7, SYS_munmap
  ecall
  ret

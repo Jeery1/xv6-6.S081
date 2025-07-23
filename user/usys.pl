@@ -36,6 +36,5 @@ entry("getpid");
 entry("sbrk");
 entry("sleep");
 entry("uptime");
+entry("connect");
 entry("ntas");
-entry("mmap");
-entry("munmap");

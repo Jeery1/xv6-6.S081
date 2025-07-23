@@ -32,6 +32,8 @@ main()
     iinit();         // inode cache
     fileinit();      // file table
     virtio_disk_init(minor(ROOTDEV)); // emulated hard disk
+    pci_init();
+    sockinit();
     userinit();      // first user process
     __sync_synchronize();
     started = 1;
