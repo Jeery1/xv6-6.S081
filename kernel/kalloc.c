@@ -18,51 +18,16 @@ struct run {
   struct run *next;
 };
 
-struct kmem {
+struct {
   struct spinlock lock;
   struct run *freelist;
 } kmem;
 
-struct kmem kmems[NCPU];
-
-
-int 
-checkfreelist(int cpuid, struct run *freelist){
-  struct run *r = freelist;
-  int count = 0;
-  printf("check cpu %d:", cpuid);
-  while (r)
-  {
-    /* code */
-    //printf("run->");
-    count++;
-    r = r->next;
-  }
-  return count;
-}
-
 void
 kinit()
 {
-  /**
-   * 为每个CPU分配Kmem
-   */
-  push_off();
-  int currentid = cpuid();
-  pop_off();
-  /**
-   * 仅0号CPU调用
-   */
-  printf("# cpuId:%d \n",currentid);
-
-  /* 初始化NCPU个🔒 */
-  for (int i = 0; i < NCPU; i++)
-  {
-    initlock(&kmems[i].lock, "kmem");
-  }  
-  //initlock(&kmem.lock, "kmem");
+  initlock(&kmem.lock, "kmem");
   freerange(end, (void*)PHYSTOP);
-  printf("# kinit end:%d \n",currentid);
 }
 
 void
@@ -74,26 +39,6 @@ freerange(void *pa_start, void *pa_end)
     kfree(p);
 }
 
-// To remove lock contention, you will have to redesign 
-// the memory allocator to avoid a single lock and list.
-struct run* trypopr(int id){
-  struct run *r;
-  r = kmems[id].freelist;
-  if(r)
-    kmems[id].freelist = r->next;
-  return r;
-}
-
-void trypushr(int id, struct run* r){
-  if(r){
-    r->next = kmems[id].freelist;
-    kmems[id].freelist = r;
-  }
-  else
-  {
-    panic("cannot push null run");
-  }
-}
 // Free the page of physical memory pointed at by v,
 // which normally should have been returned by a
 // call to kalloc().  (The exception is when
@@ -110,29 +55,13 @@ kfree(void *pa)
   memset(pa, 1, PGSIZE);
 
   r = (struct run*)pa;
-  
-  /* acquire(&kmem.lock);
+
+  acquire(&kmem.lock);
   r->next = kmem.freelist;
   kmem.freelist = r;
-  release(&kmem.lock);  */
-  
-  push_off();
-  int currentid = cpuid();
-  pop_off();
-  
-  acquire(&kmems[currentid].lock);
-  /* r->next = kmems[currentid].freelist;
-  kmems[currentid].freelist = r; */
-  trypushr(currentid, r);
-  release(&kmems[currentid].lock);
-  
+  release(&kmem.lock);
 }
 
-
-
-/**
- * pop a page in freelist
- */
 // Allocate one 4096-byte page of physical memory.
 // Returns a pointer that the kernel can use.
 // Returns 0 if the memory cannot be allocated.
@@ -140,50 +69,14 @@ void *
 kalloc(void)
 {
   struct run *r;
-  int issteal = 0;/** 标识是否为偷盗 */
-  push_off();
-  int currentid = cpuid();
-  pop_off();
 
-  acquire(&kmems[currentid].lock);
-  
-  r = trypopr(currentid);
+  acquire(&kmem.lock);
+  r = kmem.freelist;
+  if(r)
+    kmem.freelist = r->next;
+  release(&kmem.lock);
 
-  if(!r){
-    //printf("oops out of memory\n");
-    for (int id = 0; id < NCPU; id++)
-    {
-      /* steal first run */
-      if(id != currentid){
-        /** 锁住id的freelist，此时不让其他cpu访问  */
-        if(kmems[id].freelist){
-          acquire(&kmems[id].lock);
-          
-          /** 卸下id的free page */
-          r = trypopr(id);
-          /** 为currentid的freelist添加一个run */
-          trypushr(currentid, r);
-
-          issteal = 1;
-          
-          release(&kmems[id].lock);
-          break;
-        }
-      } 
-      //printf("\n");
-    }
-  }
-  /** 如果是偷盗的，则把currentid的freelist释放出来  */
-  if(issteal)
-    r = trypopr(currentid);
-  
-  release(&kmems[currentid].lock);
-  
-  if(r){
-    //printf("currentid: %d, r: %p\n", currentid, r);
+  if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
-  }
-  /** 返回该page  */
-  //printf("issteal: %d \n", issteal);
   return (void*)r;
 }

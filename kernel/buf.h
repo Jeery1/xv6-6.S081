@@ -8,7 +8,5 @@ struct buf {
   struct buf *prev; // LRU cache list
   struct buf *next;
   uchar data[BSIZE];
-  /** 尝试使用time_stamp */
-  uint time_stamp; 
 };
 

@@ -87,7 +87,6 @@ sys_write(void)
 
   if(argfd(0, 0, &f) < 0 || argint(2, &n) < 0 || argaddr(1, &p) < 0)
     return -1;
-
   return filewrite(f, p, n);
 }
 
@@ -283,70 +282,6 @@ create(char *path, short type, short major, short minor)
   return ip;
 }
 
-uint64
-sys_open(void)
-{
-  char path[MAXPATH];
-  int fd, omode;
-  struct file *f;
-  struct inode *ip;
-  int n;
-
-  if((n = argstr(0, path, MAXPATH)) < 0 || argint(1, &omode) < 0)
-    return -1;
-
-  begin_op(ROOTDEV);
-
-  if(omode & O_CREATE){
-    ip = create(path, T_FILE, 0, 0);
-    if(ip == 0){
-      end_op(ROOTDEV);
-      return -1;
-    }
-  } else {
-    if((ip = namei(path)) == 0){
-      end_op(ROOTDEV);
-      return -1;
-    }
-    ilock(ip);
-    if(ip->type == T_DIR && omode != O_RDONLY){
-      iunlockput(ip);
-      end_op(ROOTDEV);
-      return -1;
-    }
-  }
-
-  if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
-    iunlockput(ip);
-    end_op(ROOTDEV);
-    return -1;
-  }
-
-  if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
-    if(f)
-      fileclose(f);
-    iunlockput(ip);
-    end_op(ROOTDEV);
-    return -1;
-  }
-
-  if(ip->type == T_DEVICE){
-    f->type = FD_DEVICE;
-    f->major = ip->major;
-    f->minor = ip->minor;
-  } else {
-    f->type = FD_INODE;
-  }
-  f->ip = ip;
-  f->off = 0;
-  f->readable = !(omode & O_WRONLY);
-  f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
-
-  iunlock(ip);
-  end_op(ROOTDEV);
-
-  return fd;
-}
 
 uint64
 sys_mkdir(void)
@@ -480,6 +415,159 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+/**
+ *
+ * Modify the open system call to handle the case where the path refers to a symbolic link. 
+ * If the file does not exist, open must fail. 
+ * When a process specifies O_NOFOLLOW in the flags to open, 
+ * open should open the symlink (and not follow the symbolic link). 
+ * 
+ */
+int break_point = 0;
+
+void
+mkdebug(){
+  break_point++;
+  printf("### break point %d \n", break_point);
+}
+
+void
+cleandebug(){
+  break_point = 0;
+}
+
+void 
+printinode(struct inode* ip){
+  printf("-----------------------------\n"); 
+  printf("dev:%d\n", ip->dev);
+  printf("inum:%d\n", ip->inum);
+  printf("target:%s\n", ip->target);
+  printf("type:%d\n", ip->type);
+  printf("-----------------------------\n");
+}
+
+uint64
+sys_open(void)
+{
+  char path[MAXPATH];
+  int fd, omode;
+  struct file *f;
+  struct inode *ip;
+  int n;
+  if((n = argstr(0, path, MAXPATH)) < 0 || argint(1, &omode) < 0)
+    return -1;
+
+  begin_op(ROOTDEV);
+  
+  if(omode & O_CREATE){
+    ip = create(path, T_FILE, 0, 0);
+    ////printf("### create %s\n",path);
+    if(ip == 0){
+      end_op(ROOTDEV);
+      return -1;
+    }
+  } else {
+    if((ip = namei(path)) == 0){
+      end_op(ROOTDEV);
+      return -1;
+    }
+    /** Open symlink  */
+    if(ip->type == T_SYMLINK && !(omode & O_NOFOLLOW)){
+      int counter = 0;
+      /** 递归查找  */
+      while ((ip = namei(ip->target)) && ip->type == T_SYMLINK)
+      {
+        counter++;
+        if(counter >= 10){
+          printf("open(): too many symlink\n");
+          end_op(ROOTDEV);
+          return -1;
+        }
+      }
+      if(ip == 0){
+        end_op(ROOTDEV);
+        return -1;
+      }
+    }
+    ilock(ip);
+
+    if(ip->type == T_DIR && omode != O_RDONLY){
+      iunlockput(ip);
+      end_op(ROOTDEV);
+      return -1;
+    }
+    
+  }
+  
+  if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
+    iunlockput(ip);
+    end_op(ROOTDEV);
+    return -1;
+  }
+
+  if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
+    if(f)
+      fileclose(f);
+    iunlockput(ip);
+    end_op(ROOTDEV);
+    return -1;
+  }
+
+  if(ip->type == T_DEVICE){
+    f->type = FD_DEVICE;
+    f->major = ip->major;
+    f->minor = ip->minor;
+  } else {
+    f->type = FD_INODE;
+  }
+
+  f->ip = ip;
+  f->off = 0;
+  f->readable = !(omode & O_WRONLY);
+  f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
+  iunlock(ip);
+  end_op(ROOTDEV);
+  return fd;
+}
+
+/**
+ * 
+ * Note that target does not need to exist for the system call to succeed. 
+ * You will need to choose somewhere to store the target path of a symbolic link, 
+ * for example, in the inode's data blocks.
+ * 
+ */
+uint64
+sys_symlink(void){
+  /** 建立软链接文件  */
+  struct inode *ip;
+  int target_len, path_len;
+  char target[MAXPATH], path[MAXPATH];
+  /* struct file *f;
+  int fd; */
+  
+  if((target_len = argstr(0, target, MAXPATH)) < 0 || 
+     (path_len = argstr(1, path, MAXPATH)) < 0 )
+    return -1;
+
+  
+  begin_op(ROOTDEV);
+  /**
+   * Create returns a locked inode, but namei does not
+   */
+  ip = create(path, T_SYMLINK, 0, 0);
+  if(ip == 0){
+    end_op(ROOTDEV);
+    return -1;
+  }
+  if(target_len > MAXPATH)
+    target_len = MAXPATH;
+  memset(ip->target, 0, MAXPATH);
+  memmove(ip->target, target, target_len);
+  iunlockput(ip);
+  end_op(ROOTDEV);
   return 0;
 }
 

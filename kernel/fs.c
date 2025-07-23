@@ -294,7 +294,7 @@ ilock(struct inode *ip)
 
   if(ip == 0 || ip->ref < 1)
     panic("ilock");
-
+    
   acquiresleep(&ip->lock);
 
   if(ip->valid == 0){
@@ -375,30 +375,100 @@ iunlockput(struct inode *ip)
 
 // Return the disk block address of the nth block in inode ip.
 // If there is no such block, bmap allocates one.
+/** 
+ * When writing, bmap() allocates new blocks as needed to hold file content,
+ * as well as allocating an indirect block if needed to hold block addresses.
+ */
+
+/**
+1.Make sure you understand bmap(). 
+  Write out a diagram of the relationships between ip->addrs[], 
+  the indirect block, the doubly-indirect block and the singly-indirect blocks it points to, 
+  and data blocks. Make sure you understand 
+  why adding a doubly-indirect block increases the maximum file size by 256*256 blocks (really -1, since you have to decrease the number of direct blocks by one).
+
+2.Think about how you'll index the doubly-indirect block, 
+  and the indirect blocks it points to, with the logical block number.
+
+3.If you change the definition of NDIRECT, 
+  you'll probably have to change the declaration of addrs[] in struct inode in file.h. 
+  Make sure that struct inode and struct dinode have the same number of elements in their addrs[] arrays.
+
+4.If you change the definition of NDIRECT, 
+  make sure to create a new fs.img, since mkfs uses NDIRECT to build the file system.
+
+5.If your file system gets into a bad state, 
+  perhaps by crashing, delete fs.img (do this from Unix, not xv6). 
+  make will build a new clean file system image for you.
+
+6.Don't forget to brelse() each block that you bread().
+
+7.You should allocate indirect blocks and doubly-indirect blocks only as needed, like the original bmap().
+
+8.Make sure itrunc frees all blocks of a file, including double-indirect blocks.
+ */
+
+uint 
+mapaddr_single(struct inode *ip , struct buf *bp)
+{
+  return 0;
+}
+
 static uint
 bmap(struct inode *ip, uint bn)
 {
-  uint addr, *a;
-  struct buf *bp;
-
+  uint addr, *a, *a2;
+  struct buf *bp, *bp2;
+  /** bn是相对file（inode）的虚拟编号  */
+  /** 直接返回块ip->addrs[bn]  */
   if(bn < NDIRECT){
     if((addr = ip->addrs[bn]) == 0)
       ip->addrs[bn] = addr = balloc(ip->dev);
     return addr;
   }
+  /** 否则减去NDIRENT  */
   bn -= NDIRECT;
-
+  //11 + 256 + 256 * 256
   if(bn < NINDIRECT){
-    // Load indirect block, allocating if necessary.
-    if((addr = ip->addrs[NDIRECT]) == 0)
-      ip->addrs[NDIRECT] = addr = balloc(ip->dev);
-    bp = bread(ip->dev, addr);
-    a = (uint*)bp->data;
-    if((addr = a[bn]) == 0){
-      a[bn] = addr = balloc(ip->dev);
-      log_write(bp);
+    if(bn < SINGLEDIRECT){
+      // Load indirect block, allocating if necessary.
+      if((addr = ip->addrs[NDIRECT]) == 0)
+        ip->addrs[NDIRECT] = addr = balloc(ip->dev);
+      /** Return a locked buf with the contents of the indicated block.  */
+      bp = bread(ip->dev, addr);
+      a = (uint*)bp->data; 
+      if((addr = a[bn]) == 0){
+        a[bn] = addr = balloc(ip->dev);
+        log_write(bp);
+      }
+      brelse(bp);
     }
-    brelse(bp);
+    else
+    {
+      bn -= SINGLEDIRECT;
+      int single_indirect_index = bn / SINGLEDIRECT;
+      /** single-indirect内部相对索引  */   
+      int relative_offset_bn = bn % SINGLEDIRECT;
+      int pos = NDIRECT + 1;
+      if((addr = ip->addrs[pos]) == 0)
+        ip->addrs[pos] = addr = balloc(ip->dev);
+
+      bp = bread(ip->dev, addr);
+      a = (uint*)bp->data;
+      if((addr = a[single_indirect_index]) == 0){
+        a[single_indirect_index] = addr = balloc(ip->dev);
+        log_write(bp);
+      }
+      brelse(bp);
+
+      bp2 = bread(ip->dev, addr);
+      a2 = (uint*)bp2->data; 
+      if((addr = a2[relative_offset_bn]) == 0){
+        a2[relative_offset_bn] = addr = balloc(ip->dev);
+        log_write(bp2);
+      }
+      brelse(bp2);
+    }
     return addr;
   }
 
@@ -414,28 +484,56 @@ static void
 itrunc(struct inode *ip)
 {
   int i, j;
-  struct buf *bp;
-  uint *a;
-
+  struct buf *bp, *bp2;
+  uint *a, *a2;
+  /** Free掉所有Direct */
   for(i = 0; i < NDIRECT; i++){
     if(ip->addrs[i]){
       bfree(ip->dev, ip->addrs[i]);
       ip->addrs[i] = 0;
     }
   }
-
+  /** Free掉single-direct  */
   if(ip->addrs[NDIRECT]){
     bp = bread(ip->dev, ip->addrs[NDIRECT]);
     a = (uint*)bp->data;
-    for(j = 0; j < NINDIRECT; j++){
+    for (j = 0; j < SINGLEDIRECT; j++)
+    {
+      /* code */
       if(a[j])
         bfree(ip->dev, a[j]);
     }
+    
     brelse(bp);
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
   }
-
+  /** Free掉double-direct  */
+  if(ip->addrs[NDIRECT + 1]){
+    printf("free double\n");
+    int pos = NDIRECT + 1;
+    bp = bread(ip->dev, ip->addrs[pos]);
+    a = (uint*)bp->data;
+    int number_of_single_direct = BSIZE / sizeof(uint);
+    for (i = 0; i < number_of_single_direct; i++)
+    {
+      if(a[i]){
+        bp2 = bread(ip->dev, a[i]);
+        a2 = (uint *)bp2->data;
+        for (j = 0; j < SINGLEDIRECT; j++)
+        {
+          if(a2[j])
+            bfree(ip->dev, a2[j]);
+        }
+        brelse(bp2);
+        bfree(ip->dev, a[i]);
+        a[i] = 0;
+      }
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[pos]);
+    ip->addrs[pos] = 0;
+  }
   ip->size = 0;
   iupdate(ip);
 }
@@ -483,6 +581,7 @@ readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
 // Caller must hold ip->lock.
 // If user_src==1, then src is a user virtual address;
 // otherwise, src is a kernel address.
+/** 写入内容  */
 int
 writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
 {
@@ -496,6 +595,11 @@ writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
 
   for(tot=0; tot<n; tot+=m, off+=m, src+=m){
     bp = bread(ip->dev, bmap(ip, off/BSIZE));
+    /** 物理块重复了的指针？是什么问题  */
+    /* printf("off/BSIZE: %d , bmap(ip, off/BSIZE): %p\n",off / BSIZE, bmap(ip, off/BSIZE));
+    if((off / BSIZE) > SINGLEDIRECT + 20){
+      exit(-1);
+    } */
     m = min(n - tot, BSIZE - off%BSIZE);
     if(either_copyin(bp->data + (off % BSIZE), user_src, src, m) == -1) {
       brelse(bp);

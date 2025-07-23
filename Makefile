@@ -143,6 +143,7 @@ UPROGS=\
 	$U/_bcachetest\
 	$U/_alloctest\
 	$U/_bigfile\
+	$U/_symlinktest\
 
 fs.img: mkfs/mkfs README user/xargstest.sh $(UPROGS)
 	mkfs/mkfs fs.img README user/xargstest.sh $(UPROGS)
@@ -164,7 +165,7 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
 	then echo "-gdb tcp::$(GDBPORT)"; \
 	else echo "-s -p $(GDBPORT)"; fi)
 ifndef CPUS
-CPUS := 3
+CPUS := 1
 endif
 
 QEMUEXTRA = 
