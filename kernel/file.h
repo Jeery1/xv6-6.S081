@@ -14,8 +14,6 @@ struct file {
 #define minor(dev)  ((dev) & 0xFFFF)
 #define	mkdev(m,n)  ((uint)((m)<<16| (n)))
 
-/** inode is the in-memory 
- * copy of a struct dinode on disk.  */
 // in-memory copy of an inode
 struct inode {
   uint dev;           // Device number
@@ -23,16 +21,13 @@ struct inode {
   int ref;            // Reference count
   struct sleeplock lock; // protects everything below here
   int valid;          // inode has been read from disk?
-  /** Implemente Symbolic link  */
-  char target[MAXPATH];
 
   short type;         // copy of disk inode
   short major;
   short minor;
   short nlink;
   uint size;
-  /** Modify NDIRENT 2 11， and implements SINGLE-INDIRENT & DOUBLE-INDIRENT  */
-  uint addrs[NDIRECT+2];
+  uint addrs[NDIRECT+1];
 };
 
 // map major device number to device functions.

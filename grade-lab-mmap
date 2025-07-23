@@ -5,33 +5,25 @@ from gradelib import *
 
 r = Runner(save("xv6.out"))
 
-@test(40, "running bigfile")
-def test_bigfile():
+@test(0, "running mmaptest")
+def test_mmaptest():
     r.run_qemu(shell_script([
-        'bigfile'
-    ]), timeout=600)
-    r.match('^wrote 65803 blocks$')
-    r.match('^bigfile done; ok$')
+        'mmaptest'
+    ]), timeout=180)
 
-@test(0, "running symlinktest")
-def test_symlinktest():
-    r.run_qemu(shell_script([
-        'symlinktest'
-    ]), timeout=20)
+@test(40, "mmaptest: mmap_test", parent=test_mmaptest)
+def test_mmaptest_mmap_test():
+    r.match('^mmap_test OK$')
 
-@test(20, "symlinktest: symlinks", parent=test_symlinktest)
-def test_symlinktest_symlinks():
-    r.match("^test symlinks: ok$")
-
-@test(20, "symlinktest: concurrent symlinks", parent=test_symlinktest)
-def test_symlinktest_symlinks():
-    r.match("^test concurrent symlinks: ok$")
+@test(40, "mmaptest: fork_test", parent=test_mmaptest)
+def test_mmaptest_fork_test():
+    r.match('^fork_test OK$')
 
 @test(19, "usertests")
 def test_usertests():
     r.run_qemu(shell_script([
         'usertests'
-    ]), timeout=600)
+    ]), timeout=300)
     r.match('^ALL TESTS PASSED$')
 
 @test(1, "time")

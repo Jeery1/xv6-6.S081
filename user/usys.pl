@@ -37,4 +37,5 @@ entry("sbrk");
 entry("sleep");
 entry("uptime");
 entry("ntas");
-entry("symlink");
+entry("mmap");
+entry("munmap");

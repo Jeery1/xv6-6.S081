@@ -87,6 +87,7 @@ sys_write(void)
 
   if(argfd(0, 0, &f) < 0 || argint(2, &n) < 0 || argaddr(1, &p) < 0)
     return -1;
+
   return filewrite(f, p, n);
 }
 
@@ -282,6 +283,70 @@ create(char *path, short type, short major, short minor)
   return ip;
 }
 
+uint64
+sys_open(void)
+{
+  char path[MAXPATH];
+  int fd, omode;
+  struct file *f;
+  struct inode *ip;
+  int n;
+
+  if((n = argstr(0, path, MAXPATH)) < 0 || argint(1, &omode) < 0)
+    return -1;
+
+  begin_op(ROOTDEV);
+
+  if(omode & O_CREATE){
+    ip = create(path, T_FILE, 0, 0);
+    if(ip == 0){
+      end_op(ROOTDEV);
+      return -1;
+    }
+  } else {
+    if((ip = namei(path)) == 0){
+      end_op(ROOTDEV);
+      return -1;
+    }
+    ilock(ip);
+    if(ip->type == T_DIR && omode != O_RDONLY){
+      iunlockput(ip);
+      end_op(ROOTDEV);
+      return -1;
+    }
+  }
+
+  if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
+    iunlockput(ip);
+    end_op(ROOTDEV);
+    return -1;
+  }
+
+  if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
+    if(f)
+      fileclose(f);
+    iunlockput(ip);
+    end_op(ROOTDEV);
+    return -1;
+  }
+
+  if(ip->type == T_DEVICE){
+    f->type = FD_DEVICE;
+    f->major = ip->major;
+    f->minor = ip->minor;
+  } else {
+    f->type = FD_INODE;
+  }
+  f->ip = ip;
+  f->off = 0;
+  f->readable = !(omode & O_WRONLY);
+  f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
+
+  iunlock(ip);
+  end_op(ROOTDEV);
+
+  return fd;
+}
 
 uint64
 sys_mkdir(void)
@@ -417,157 +482,123 @@ sys_pipe(void)
   }
   return 0;
 }
-/**
- *
- * Modify the open system call to handle the case where the path refers to a symbolic link. 
- * If the file does not exist, open must fail. 
- * When a process specifies O_NOFOLLOW in the flags to open, 
- * open should open the symlink (and not follow the symbolic link). 
- * 
- */
-int break_point = 0;
 
-void
-mkdebug(){
-  break_point++;
-  printf("### break point %d \n", break_point);
-}
-
-void
-cleandebug(){
-  break_point = 0;
-}
-
-void 
-printinode(struct inode* ip){
-  printf("-----------------------------\n"); 
-  printf("dev:%d\n", ip->dev);
-  printf("inum:%d\n", ip->inum);
-  printf("target:%s\n", ip->target);
-  printf("type:%d\n", ip->type);
-  printf("-----------------------------\n");
-}
 
 uint64
-sys_open(void)
-{
-  char path[MAXPATH];
-  int fd, omode;
-  struct file *f;
-  struct inode *ip;
-  int n;
-  if((n = argstr(0, path, MAXPATH)) < 0 || argint(1, &omode) < 0)
-    return -1;
-
-  begin_op(ROOTDEV);
+sys_mmap(void){
+  uint64 addr;
+  int length;
+  int prot;
+  int flags;
+  int fd;
+  struct file* f;
+  int offset;
   
-  if(omode & O_CREATE){
-    ip = create(path, T_FILE, 0, 0);
-    ////printf("### create %s\n",path);
-    if(ip == 0){
-      end_op(ROOTDEV);
-      return -1;
+  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0 || 
+     argint(2, &prot) < 0 || argint(3, &flags) < 0 || 
+     argfd(4, &fd, &f) < 0 || argint(5, &offset) < 0){
+    return -1;
+  }
+
+  if(!f->writable && (prot & PROT_WRITE) && (flags & MAP_SHARED)){
+    return -1;
+  }
+  struct proc* p;
+  p = myproc();
+  
+  struct VMA* vma = 0;
+  /** 从上往下找到第一个可用的vma  */
+  for (int i = NVMA - 1; i >= 0; i--)
+  {
+    if(p->vmas[i].vm_valid){
+      vma = &p->vmas[i];
+      /** 置当前的imaxvma为i  */
+      p->current_imaxvma = i;
+      break;
     }
-  } else {
-    if((ip = namei(path)) == 0){
-      end_op(ROOTDEV);
-      return -1;
-    }
-    /** Open symlink  */
-    if(ip->type == T_SYMLINK && !(omode & O_NOFOLLOW)){
-      int counter = 0;
-      /** 递归查找  */
-      while ((ip = namei(ip->target)) && ip->type == T_SYMLINK)
+  }
+  if(vma){
+    printf("sys_mmap(): %p, length: %d\n",p->current_maxva, length);
+    uint64 vm_end = PGROUNDDOWN(p->current_maxva);
+    uint64 vm_start = PGROUNDDOWN(p->current_maxva - length);
+    printf("vm_start(): %p, vm_end: %p\n",vm_start, vm_end);
+    vma->vm_valid = 0;
+    vma->vm_fd = fd;
+    vma->vm_file = f;
+    vma->vm_flags = flags;
+    vma->vm_prot = prot;
+    vma->vm_end = vm_end;
+    vma->vm_start = vm_start;
+    vma->vm_file->ref++;
+    p->current_maxva = vm_start;
+  }
+  else
+  {
+    return -1;
+  }  
+  return vma->vm_start;
+}
+
+/**
+ * int munmap(void *addr, size_t length);
+ * 
+ * 
+ * An munmap call might cover only a portion of an mmap-ed region, but you can assume that 
+ * it will either unmap at the start, 
+ * or at the end, or the whole region (but not punch a hole in the middle of a region).
+ */
+uint64
+sys_munmap(void){
+  uint64 addr;
+  int length;
+  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0){
+    return -1;
+  }
+  printf("### sys_munmap: \n");
+  printf("addr: %p, length:%d, current:%p\n", addr, length, myproc()->current_maxva);
+  struct proc* p = myproc();
+  for (int i = NVMA - 1; i >= 0; i--)
+  {
+    if(p->vmas[i].vm_start <= addr && addr <= p->vmas[i].vm_end){
+      struct VMA* vma = &p->vmas[i];
+      /** 首先要判断  */
+      if(walkaddr(p->pagetable, vma->vm_start)){
+        if(vma->vm_flags == MAP_SHARED){
+          printf("sys_munmap(): write back \n");
+          /** 回写文件  */
+          filewrite(vma->vm_file, vma->vm_start, length);
+        }
+        uvmunmap(p->pagetable, vma->vm_start, length ,1);
+      }
+
+      vma->vm_start += length;
+      printf("vma_start: %p, vma_end: %p\n", vma->vm_start, vma->vm_end);
+      if(vma->vm_start == vma->vm_end){
+        vma->vm_file->ref--;
+        /** 置该块可用  */
+        vma->vm_valid = 1;
+      }
+
+      /** Shrink  */
+      int j;
+      /** 紧缩 p->current_maxva */
+      for (j = p->current_imaxvma; j < NVMA; j++)
       {
-        counter++;
-        if(counter >= 10){
-          printf("open(): too many symlink\n");
-          end_op(ROOTDEV);
-          return -1;
+        if(!p->vmas[j].vm_valid){
+          p->current_maxva = p->vmas[j].vm_start;
+          p->current_imaxvma = j;
+          break;
         }
       }
-      if(ip == 0){
-        end_op(ROOTDEV);
-        return -1;
+      if(j == NVMA){
+        p->current_maxva = VMASTART;
       }
+      return 0;
     }
-    ilock(ip);
-
-    if(ip->type == T_DIR && omode != O_RDONLY){
-      iunlockput(ip);
-      end_op(ROOTDEV);
-      return -1;
-    }
-    
   }
   
-  if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
-    iunlockput(ip);
-    end_op(ROOTDEV);
-    return -1;
-  }
-
-  if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
-    if(f)
-      fileclose(f);
-    iunlockput(ip);
-    end_op(ROOTDEV);
-    return -1;
-  }
-
-  if(ip->type == T_DEVICE){
-    f->type = FD_DEVICE;
-    f->major = ip->major;
-    f->minor = ip->minor;
-  } else {
-    f->type = FD_INODE;
-  }
-
-  f->ip = ip;
-  f->off = 0;
-  f->readable = !(omode & O_WRONLY);
-  f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
-  iunlock(ip);
-  end_op(ROOTDEV);
-  return fd;
+  printf("################ arrive at munmap!\n");
+  return -1;
 }
 
-/**
- * 
- * Note that target does not need to exist for the system call to succeed. 
- * You will need to choose somewhere to store the target path of a symbolic link, 
- * for example, in the inode's data blocks.
- * 
- */
-uint64
-sys_symlink(void){
-  /** 建立软链接文件  */
-  struct inode *ip;
-  int target_len, path_len;
-  char target[MAXPATH], path[MAXPATH];
-  /* struct file *f;
-  int fd; */
-  
-  if((target_len = argstr(0, target, MAXPATH)) < 0 || 
-     (path_len = argstr(1, path, MAXPATH)) < 0 )
-    return -1;
-
-  
-  begin_op(ROOTDEV);
-  /**
-   * Create returns a locked inode, but namei does not
-   */
-  ip = create(path, T_SYMLINK, 0, 0);
-  if(ip == 0){
-    end_op(ROOTDEV);
-    return -1;
-  }
-  if(target_len > MAXPATH)
-    target_len = MAXPATH;
-  memset(ip->target, 0, MAXPATH);
-  memmove(ip->target, target, target_len);
-  iunlockput(ip);
-  end_op(ROOTDEV);
-  return 0;
-}
 
