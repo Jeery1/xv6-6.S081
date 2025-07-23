@@ -49,16 +49,17 @@ usertrap(void)
   
   // save user program counter.
   p->tf->epc = r_sepc();
-
+  
   if(r_scause() == 8){
     // system call
-    /* printf("SysyCall\n"); */
+
     if(p->killed)
       exit(-1);
 
     // sepc points to the ecall instruction,
     // but we want to return to the next instruction.
     p->tf->epc += 4;
+
     // an interrupt will change sstatus &c registers,
     // so don't enable until done with those registers.
     intr_on();
@@ -76,19 +77,8 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2){
-    // printf("got tick intr\n");
-    // printf("num:%d\n",p->tf->a7);
-    p->tickpassed++;
-    if(p->ticks != 0){
-      if(p->tickpassed == p->ticks){
-        memmove(&p->savedtf, p->tf, sizeof(struct trapframe));
-        p->tf->epc = (uint64)p->handler;
-      }
-    }
+  if(which_dev == 2)
     yield();
-  }
-    
 
   usertrapret();
 }
@@ -137,9 +127,6 @@ usertrapret(void)
   ((void (*)(uint64,uint64))fn)(TRAPFRAME, satp);
 }
 
-/**
- * 由KernelVec.s 48行跳转
- */
 // interrupts and exceptions from kernel code go here via kernelvec,
 // on whatever the current kernel stack is.
 // must be 4-byte aligned to fit in stvec.
@@ -155,19 +142,13 @@ kerneltrap()
     panic("kerneltrap: not from supervisor mode");
   if(intr_get() != 0)
     panic("kerneltrap: interrupts enabled");
-  /**
-   * It calls devintr (kernel/-
-   * trap.c:177) to check for and handle the former. 
-   * If the trap isn’t a device interrupt, it is an exception,
-   * and that is always a fatal error if it occurs in the kernel.
-   */
+
   if((which_dev = devintr()) == 0){
     printf("scause %p\n", scause);
     printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
     panic("kerneltrap");
   }
 
-  /** kerneltrap calls yield to give other threads a chance to run. */
   // give up the CPU if this is a timer interrupt.
   if(which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING)
     yield();
@@ -176,8 +157,6 @@ kerneltrap()
   // so restore trap registers for use by kernelvec.S's sepc instruction.
   w_sepc(sepc);
   w_sstatus(sstatus);
-
-  /** 返回kernelvec.S 48行  */
 }
 
 void
@@ -231,3 +210,4 @@ devintr()
     return 0;
   }
 }
+

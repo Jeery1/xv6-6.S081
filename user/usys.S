@@ -110,28 +110,3 @@ ntas:
  li a7, SYS_ntas
  ecall
  ret
-.global crash
-crash:
- li a7, SYS_crash
- ecall
- ret
-.global mount
-mount:
- li a7, SYS_mount
- ecall
- ret
-.global umount
-umount:
- li a7, SYS_umount
- ecall
- ret
-.global sigalarm
-sigalarm:
- li a7, SYS_sigalarm
- ecall
- ret
-.global sigreturn
-sigreturn:
- li a7, SYS_sigreturn
- ecall
- ret

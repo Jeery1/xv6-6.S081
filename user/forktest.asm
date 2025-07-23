@@ -47,7 +47,7 @@ forktest(void)
 
   print("fork test\n");
   3a:	00000517          	auipc	a0,0x0
-  3e:	42650513          	addi	a0,a0,1062 # 460 <sigreturn+0xc>
+  3e:	3fe50513          	addi	a0,a0,1022 # 438 <ntas+0xc>
   42:	00000097          	auipc	ra,0x0
   46:	fbe080e7          	jalr	-66(ra) # 0 <print>
 
@@ -71,7 +71,7 @@ forktest(void)
   if(n == N){
     print("fork claimed to work N times!\n");
   64:	00000517          	auipc	a0,0x0
-  68:	40c50513          	addi	a0,a0,1036 # 470 <sigreturn+0x1c>
+  68:	3e450513          	addi	a0,a0,996 # 448 <ntas+0x1c>
   6c:	00000097          	auipc	ra,0x0
   70:	f94080e7          	jalr	-108(ra) # 0 <print>
     exit(1);
@@ -113,7 +113,7 @@ forktest(void)
 
   print("fork test OK\n");
   b4:	00000517          	auipc	a0,0x0
-  b8:	40c50513          	addi	a0,a0,1036 # 4c0 <sigreturn+0x6c>
+  b8:	3e450513          	addi	a0,a0,996 # 498 <ntas+0x6c>
   bc:	00000097          	auipc	ra,0x0
   c0:	f44080e7          	jalr	-188(ra) # 0 <print>
 }
@@ -125,7 +125,7 @@ forktest(void)
   ce:	8082                	ret
       print("wait stopped early\n");
   d0:	00000517          	auipc	a0,0x0
-  d4:	3c050513          	addi	a0,a0,960 # 490 <sigreturn+0x3c>
+  d4:	39850513          	addi	a0,a0,920 # 468 <ntas+0x3c>
   d8:	00000097          	auipc	ra,0x0
   dc:	f28080e7          	jalr	-216(ra) # 0 <print>
       exit(1);
@@ -134,7 +134,7 @@ forktest(void)
   e6:	2aa080e7          	jalr	682(ra) # 38c <exit>
     print("wait got too many\n");
   ea:	00000517          	auipc	a0,0x0
-  ee:	3be50513          	addi	a0,a0,958 # 4a8 <sigreturn+0x54>
+  ee:	39650513          	addi	a0,a0,918 # 480 <ntas+0x54>
   f2:	00000097          	auipc	ra,0x0
   f6:	f0e080e7          	jalr	-242(ra) # 0 <print>
     exit(1);
@@ -801,53 +801,3 @@ ntas:
  42e:	00000073          	ecall
  ret
  432:	8082                	ret
-
-0000000000000434 <crash>:
-.global crash
-crash:
- li a7, SYS_crash
- 434:	48dd                	li	a7,23
- ecall
- 436:	00000073          	ecall
- ret
- 43a:	8082                	ret
-
-000000000000043c <mount>:
-.global mount
-mount:
- li a7, SYS_mount
- 43c:	48e1                	li	a7,24
- ecall
- 43e:	00000073          	ecall
- ret
- 442:	8082                	ret
-
-0000000000000444 <umount>:
-.global umount
-umount:
- li a7, SYS_umount
- 444:	48e5                	li	a7,25
- ecall
- 446:	00000073          	ecall
- ret
- 44a:	8082                	ret
-
-000000000000044c <sigalarm>:
-.global sigalarm
-sigalarm:
- li a7, SYS_sigalarm
- 44c:	48e9                	li	a7,26
- ecall
- 44e:	00000073          	ecall
- ret
- 452:	8082                	ret
-
-0000000000000454 <sigreturn>:
-.global sigreturn
-sigreturn:
- li a7, SYS_sigreturn
- 454:	48ed                	li	a7,27
- ecall
- 456:	00000073          	ecall
- ret
- 45a:	8082                	ret
